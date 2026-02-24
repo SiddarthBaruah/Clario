@@ -1,0 +1,344 @@
+package com.assistant.core.mcp;
+
+import com.assistant.core.service.AssistantProfileService;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClient;
+
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * OpenAI (or compatible) API integration using Spring Boot 3 RestClient.
+ * Uses native tool/function calling when the API returns tool_calls; falls back to parsing
+ * JSON from message content for older or non-standard responses.
+ * Returns strictly structured tool name + parameters; only tools mapped by ToolRouter are invoked.
+ */
+@Service
+public class LLMService {
+
+    private static final Logger log = LoggerFactory.getLogger(LLMService.class);
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
+    private final RestClient restClient;
+    private final AssistantProfileService assistantProfileService;
+    private final ToolRouter toolRouter;
+    private final String baseUrl;
+    private final String apiKey;
+
+    public LLMService(@Value("${app.llm.base-url:}") String baseUrl,
+                      @Value("${app.llm.api-key:}") String apiKey,
+                      AssistantProfileService assistantProfileService,
+                      ToolRouter toolRouter) {
+        this.assistantProfileService = assistantProfileService;
+        this.toolRouter = toolRouter;
+        this.baseUrl = baseUrl != null ? baseUrl.strip() : "";
+        this.apiKey = apiKey != null ? apiKey : "";
+        this.restClient = this.baseUrl.isBlank()
+                ? RestClient.create("http://placeholder")
+                : RestClient.builder()
+                        .baseUrl(this.baseUrl)
+                        .defaultHeader("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                        .defaultHeader("Authorization", "Bearer " + this.apiKey)
+                        .build();
+    }
+
+    /**
+     * Returns the system context (personality prompt) for the given user for use in LLM requests.
+     */
+    public String getSystemContextForUser(Long userId) {
+        return assistantProfileService.getSystemContextPrompt(userId);
+    }
+
+    /**
+     * Calls the LLM via the Responses API (/v1/responses) with tool definitions.
+     * gpt-5.1-codex-mini only supports this endpoint, not /v1/chat/completions.
+     * Returns which tool to call and its parameters.
+     */
+    public ToolCallResponse requestToolCall(Long userId, String userMessage, String conversationHistory) {
+        if (this.baseUrl.isBlank()) {
+            log.debug("LLM base URL not configured; returning placeholder tool call");
+            return placeholderResponse(userId);
+        }
+        String systemContext = getSystemContextForUser(userId);
+        String currentTimeContext = "\n\n--- Current time (use this to resolve relative times like 'tomorrow at 3pm', 'next Friday', 'in 2 hours') ---\n"
+                + "Current date and time in ISO-8601 (UTC): " + Instant.now().atOffset(ZoneOffset.UTC).toString()
+                + "\nAlways output dueTime and reminderTime as full ISO-8601 timestamps (e.g. 2025-02-24T15:00:00Z). Never use placeholders or incomplete values like 2024-10-??? or 2024-???.";
+        systemContext += currentTimeContext;
+        if (conversationHistory != null && !conversationHistory.isBlank()) {
+            systemContext += "\n\n--- Conversation History ---\n" + conversationHistory;
+        }
+        List<Map<String, Object>> tools = buildToolDefinitions();
+        try {
+            Map<String, Object> requestBody = new LinkedHashMap<>();
+            requestBody.put("model", "gpt-5.1-codex-mini");
+            requestBody.put("instructions", systemContext);
+            requestBody.put("input", List.of(
+                    Map.of("role", "user", "content", userMessage)
+            ));
+            requestBody.put("tools", tools);
+            requestBody.put("tool_choice", "required");
+
+            String responseBody = restClient.post()
+                    .uri("/v1/responses")
+                    .body(requestBody)
+                    .retrieve()
+                    .body(String.class);
+
+            if (responseBody == null || responseBody.isBlank()) {
+                return placeholderResponse(userId);
+            }
+
+            Map<String, Object> top = parseJsonToMap(responseBody);
+            if (top == null) {
+                return placeholderResponse(userId);
+            }
+
+            ToolCallResponse fromOutput = parseFunctionCallFromOutput(top);
+            if (fromOutput != null) {
+                return fromOutput;
+            }
+            return placeholderResponse(userId);
+        } catch (Exception e) {
+            log.warn("LLM request failed, returning placeholder: {}", e.getMessage());
+            return placeholderResponse(userId);
+        }
+    }
+
+    /**
+     * Parse the Responses API output array for a function_call item.
+     * Output items look like: { "type": "function_call", "name": "create_task", "arguments": "{...}" }
+     */
+    @SuppressWarnings("unchecked")
+    private static ToolCallResponse parseFunctionCallFromOutput(Map<String, Object> response) {
+        Object output = response.get("output");
+        if (!(output instanceof List<?> outputList) || outputList.isEmpty()) return null;
+
+        for (Object item : outputList) {
+            if (!(item instanceof Map<?, ?> entry)) continue;
+            if (!"function_call".equals(entry.get("type"))) continue;
+
+            String name = entry.get("name") != null ? entry.get("name").toString() : null;
+            if (name == null || name.isBlank()) continue;
+
+            Map<String, Object> params = Map.of();
+            Object argsObj = entry.get("arguments");
+            if (argsObj != null) {
+                if (argsObj instanceof Map) {
+                    params = (Map<String, Object>) argsObj;
+                } else if (!argsObj.toString().isBlank()) {
+                    Map<String, Object> parsed = parseJsonToMap(argsObj.toString());
+                    if (parsed != null) params = parsed;
+                }
+            }
+            return new ToolCallResponse(name, params);
+        }
+        return null;
+    }
+
+    /** Build tools array for /v1/responses — flat format: { type, name, description, parameters }. */
+    private List<Map<String, Object>> buildToolDefinitions() {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Tool t : toolRouter.listTools()) {
+            Map<String, Object> def = new LinkedHashMap<>();
+            def.put("type", "function");
+            def.put("name", t.name());
+            def.put("description", t.description());
+            def.put("parameters", toolParametersSchema(t.name()));
+            out.add(def);
+        }
+        return out;
+    }
+
+    /** JSON schema for each tool's parameters (userId injected by caller). */
+    private static Map<String, Object> toolParametersSchema(String toolName) {
+        return switch (toolName) {
+            case "create_task" -> Map.of(
+                    "type", "object",
+                    "properties", Map.of(
+                            "userId", Map.of("type", "number", "description", "User ID"),
+                            "title", Map.of("type", "string", "description", "Task title"),
+                            "description", Map.of("type", "string", "description", "Task description"),
+                            "dueTime", Map.of("type", "string", "description",
+                                    "Due date/time as full ISO-8601 only (e.g. 2025-02-24T15:00:00Z). Resolve relative phrases like 'tomorrow at 3pm' using the current time from context. Omit if not specified."),
+                            "reminderTime", Map.of("type", "string", "description",
+                                    "Reminder date/time as full ISO-8601 only (e.g. 2025-02-24T14:45:00Z). Resolve using current time from context. Omit if not specified.")
+                    ),
+                    "required", List.of("userId", "title")
+            );
+            case "list_tasks" -> Map.of(
+                    "type", "object",
+                    "properties", Map.of("userId", Map.of("type", "number", "description", "User ID")),
+                    "required", List.of("userId")
+            );
+            case "add_person" -> Map.of(
+                    "type", "object",
+                    "properties", Map.of(
+                            "userId", Map.of("type", "number", "description", "User ID"),
+                            "name", Map.of("type", "string", "description", "Contact name"),
+                            "notes", Map.of("type", "string", "description", "Notes"),
+                            "importantDates", Map.of("type", "string", "description", "Important dates JSON string")
+                    ),
+                    "required", List.of("userId", "name")
+            );
+            case "retrieve_people" -> Map.of(
+                    "type", "object",
+                    "properties", Map.of("userId", Map.of("type", "number", "description", "User ID")),
+                    "required", List.of("userId")
+            );
+            default -> Map.of("type", "object", "properties", Map.of("userId", Map.of("type", "number", "description", "User ID")), "required", List.of("userId"));
+        };
+    }
+
+    /** Extract choices[0].message from Chat Completions response. */
+    private static Map<String, Object> extractMessage(Map<String, Object> response) {
+        if (response == null) return null;
+        Object choices = response.get("choices");
+        if (!(choices instanceof List<?> list) || list.isEmpty()) return null;
+        Object first = list.get(0);
+        if (!(first instanceof Map)) return null;
+        Object msg = ((Map<?, ?>) first).get("message");
+        return msg instanceof Map ? (Map<String, Object>) msg : null;
+    }
+
+    /**
+     * Second LLM pass: given the original user message, the tool that was invoked, and the raw tool
+     * result, produces a natural-language reply infused with the user's personality prompt (soul script).
+     * Falls back to a plain JSON dump when the LLM is unreachable.
+     */
+    public String generateNaturalResponse(Long userId, String userMessage, String toolName,
+                                          Map<String, Object> toolResult, String conversationHistory) {
+        String systemContext = getSystemContextForUser(userId);
+        String toolResultJson;
+        try {
+            toolResultJson = OBJECT_MAPPER.writeValueAsString(toolResult);
+        } catch (Exception e) {
+            toolResultJson = toolResult.toString();
+        }
+
+        if (this.baseUrl.isBlank()) {
+            log.debug("LLM base URL not configured; returning raw tool result as response");
+            return fallbackFormat(toolName, toolResultJson);
+        }
+
+        String historyBlock = "";
+        if (conversationHistory != null && !conversationHistory.isBlank()) {
+            historyBlock = "\n\n--- Conversation History ---\n" + conversationHistory + "\n";
+        }
+
+        String responseSystemPrompt = systemContext + historyBlock + "\n\n"
+                + "You just executed a tool on behalf of the user. "
+                + "Summarize the result below in a warm, concise, natural-language message. "
+                + "Do NOT mention tool names, JSON, or technical details. "
+                + "Respond as if you are chatting with a friend on WhatsApp — keep it short and helpful.";
+
+        String toolContext = "The user said: \"" + userMessage + "\"\n"
+                + "Tool executed: " + toolName + "\n"
+                + "Result:\n" + toolResultJson;
+
+        try {
+            Map<String, Object> requestBody = new java.util.LinkedHashMap<>();
+            requestBody.put("model", "gpt-4.1-nano");
+            requestBody.put("messages", List.of(
+                    Map.of("role", "system", "content", responseSystemPrompt),
+                    Map.of("role", "user", "content", toolContext)
+            ));
+
+            String responseBody = restClient.post()
+                    .uri("/v1/chat/completions")
+                    .body(requestBody)
+                    .retrieve()
+                    .body(String.class);
+
+            if (responseBody == null || responseBody.isBlank()) {
+                return fallbackFormat(toolName, toolResultJson);
+            }
+
+            Map<String, Object> top = parseJsonToMap(responseBody);
+            Map<String, Object> message = extractMessage(top);
+            if (message == null) {
+                return fallbackFormat(toolName, toolResultJson);
+            }
+
+            Object content = message.get("content");
+            if (content != null && !content.toString().isBlank()) {
+                return content.toString().strip();
+            }
+            return fallbackFormat(toolName, toolResultJson);
+        } catch (Exception e) {
+            log.warn("Natural-response LLM call failed, using fallback: {}", e.getMessage());
+            return fallbackFormat(toolName, toolResultJson);
+        }
+    }
+
+    /**
+     * General-purpose LLM call: sends a system prompt + user message and returns the
+     * assistant's text reply.  Used for tasks like conversation compaction where no
+     * tool calling is needed.
+     */
+    public String chat(String systemPrompt, String userMessage) {
+        if (this.baseUrl.isBlank()) {
+            log.debug("LLM base URL not configured; returning user message as-is");
+            return userMessage;
+        }
+        try {
+            Map<String, Object> requestBody = new java.util.LinkedHashMap<>();
+            requestBody.put("model", "gpt-4.1-nano");
+            requestBody.put("messages", List.of(
+                    Map.of("role", "system", "content", systemPrompt),
+                    Map.of("role", "user", "content", userMessage)
+            ));
+
+            String responseBody = restClient.post()
+                    .uri("/v1/chat/completions")
+                    .body(requestBody)
+                    .retrieve()
+                    .body(String.class);
+
+            if (responseBody == null || responseBody.isBlank()) {
+                return userMessage;
+            }
+
+            Map<String, Object> top = parseJsonToMap(responseBody);
+            Map<String, Object> message = extractMessage(top);
+            if (message != null) {
+                Object content = message.get("content");
+                if (content != null && !content.toString().isBlank()) {
+                    return content.toString().strip();
+                }
+            }
+            return userMessage;
+        } catch (Exception e) {
+            log.warn("LLM chat call failed, returning input as fallback: {}", e.getMessage());
+            return userMessage;
+        }
+    }
+
+    private static String fallbackFormat(String toolName, String resultJson) {
+        return "Here's what I found (" + toolName + "):\n" + resultJson;
+    }
+
+    /**
+     * Placeholder when LLM is not configured or request fails. Returns a safe default (list_tasks).
+     */
+    private ToolCallResponse placeholderResponse(Long userId) {
+        return new ToolCallResponse("list_tasks", Map.of("userId", userId));
+    }
+
+    private static Map<String, Object> parseJsonToMap(String json) {
+        try {
+            return OBJECT_MAPPER.readValue(json, new TypeReference<>() {});
+        } catch (Exception e) {
+            return null;
+        }
+    }
+}
