@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * OpenAI (or compatible) API integration using Spring Boot 3 RestClient.
@@ -115,9 +116,133 @@ public class LLMService {
     }
 
     /**
+     * Multi-turn conversation with tools. Sends full message list; returns either final text content
+     * or a list of tool calls (possibly multiple). Used by the conversation loop.
+     * Replaces the single-shot requestToolCall + generateNaturalResponse flow for the loop path.
+     */
+    public ChatWithToolsResult chatWithTools(Long userId, List<Map<String, Object>> messages) {
+        if (this.baseUrl.isBlank()) {
+            log.debug("LLM base URL not configured; returning placeholder tool call");
+            return new ChatWithToolsResult.ToolCalls(List.of(
+                    new ChatWithToolsResult.SingleToolCall("call_0", "list_tasks", Map.of("userId", userId))));
+        }
+        String systemContext = getSystemContextForUser(userId);
+        String currentTimeContext = "\n\n--- Current time (use this to resolve relative times like 'tomorrow at 3pm', 'next Friday', 'in 2 hours') ---\n"
+                + "Current date and time in ISO-8601 (UTC): " + Instant.now().atOffset(ZoneOffset.UTC)
+                + "\nAlways output dueTime and reminderTime as full ISO-8601 timestamps (e.g. 2025-02-24T15:00:00Z). Never use placeholders or incomplete values.";
+        systemContext += currentTimeContext;
+
+        List<Map<String, Object>> input = buildInputForResponsesApi(messages);
+        List<Map<String, Object>> tools = buildToolDefinitions();
+        try {
+            Map<String, Object> requestBody = new LinkedHashMap<>();
+            requestBody.put("model", "gpt-5.1-codex-mini");
+            requestBody.put("instructions", systemContext);
+            requestBody.put("input", input);
+            requestBody.put("tools", tools);
+            requestBody.put("tool_choice", "auto");
+
+            String responseBody = restClient.post()
+                    .uri("/v1/responses")
+                    .body(requestBody)
+                    .retrieve()
+                    .body(String.class);
+
+            if (responseBody == null || responseBody.isBlank()) {
+                return new ChatWithToolsResult.ToolCalls(List.of(
+                        new ChatWithToolsResult.SingleToolCall("call_0", "list_tasks", Map.of("userId", userId))));
+            }
+            Map<String, Object> top = parseJsonToMap(responseBody);
+            if (top == null) {
+                return new ChatWithToolsResult.ToolCalls(List.of(
+                        new ChatWithToolsResult.SingleToolCall("call_0", "list_tasks", Map.of("userId", userId))));
+            }
+            return parseChatWithToolsOutput(top, userId);
+        } catch (Exception e) {
+            log.warn("chatWithTools failed, returning placeholder: {}", e.getMessage());
+            return new ChatWithToolsResult.ToolCalls(List.of(
+                    new ChatWithToolsResult.SingleToolCall("call_0", "list_tasks", Map.of("userId", userId))));
+        }
+    }
+
+    /** Build input array for /v1/responses from our message list (user/assistant/tool). */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> buildInputForResponsesApi(List<Map<String, Object>> messages) {
+        List<Map<String, Object>> input = new ArrayList<>();
+        for (Map<String, Object> m : messages) {
+            String role = Objects.toString(m.get("role"), "user");
+            Object content = m.get("content");
+            String contentStr = content != null ? content.toString() : "";
+            if ("user".equals(role)) {
+                input.add(Map.of("role", "user", "content", contentStr));
+            } else if ("assistant".equals(role)) {
+                Object toolCalls = m.get("tool_calls");
+                if (toolCalls instanceof List<?> list && !list.isEmpty()) {
+                    input.add(new LinkedHashMap<>(Map.of("role", "assistant", "content", contentStr, "tool_calls", toolCalls)));
+                } else {
+                    input.add(Map.of("role", "assistant", "content", contentStr));
+                }
+            } else if ("tool".equals(role) || "function".equals(role)) {
+                String toolCallId = m.get("tool_call_id") != null ? m.get("tool_call_id").toString() : m.get("name") != null ? m.get("name").toString() : "call";
+                input.add(Map.of("role", "function", "name", toolCallId, "content", contentStr));
+            }
+            // skip system or unknown
+        }
+        return input;
+    }
+
+    @SuppressWarnings("unchecked")
+    private ChatWithToolsResult parseChatWithToolsOutput(Map<String, Object> response, Long userId) {
+        Object output = response.get("output");
+        if (!(output instanceof List<?> outputList) || outputList.isEmpty()) {
+            return new ChatWithToolsResult.ToolCalls(List.of(
+                    new ChatWithToolsResult.SingleToolCall("call_0", "list_tasks", Map.of("userId", userId))));
+        }
+        List<ChatWithToolsResult.SingleToolCall> toolCalls = new ArrayList<>();
+        String textContent = null;
+        int callIndex = 0;
+        for (Object item : outputList) {
+            if (!(item instanceof Map<?, ?> entry)) continue;
+            String type = entry.get("type") != null ? entry.get("type").toString() : "";
+            if ("function_call".equals(type)) {
+                String name = entry.get("name") != null ? entry.get("name").toString() : null;
+                if (name != null && !name.isBlank()) {
+                    Map<String, Object> params = Map.of();
+                    Object argsObj = entry.get("arguments");
+                    if (argsObj != null) {
+                        if (argsObj instanceof Map) {
+                            params = (Map<String, Object>) argsObj;
+                        } else if (!argsObj.toString().isBlank()) {
+                            Map<String, Object> parsed = parseJsonToMap(argsObj.toString());
+                            if (parsed != null) params = parsed;
+                        }
+                    }
+                    String id = entry.get("id") != null ? entry.get("id").toString() : ("call_" + callIndex++);
+                    toolCalls.add(new ChatWithToolsResult.SingleToolCall(id, name, params));
+                }
+            } else if ("message".equals(type)) {
+                Object content = entry.get("content");
+                if (content != null && !content.toString().isBlank()) {
+                    textContent = content.toString().strip();
+                }
+            }
+        }
+        if (!toolCalls.isEmpty()) {
+            return new ChatWithToolsResult.ToolCalls(toolCalls);
+        }
+        if (textContent != null && !textContent.isBlank()) {
+            return new ChatWithToolsResult.Content(textContent);
+        }
+        return new ChatWithToolsResult.ToolCalls(List.of(
+                new ChatWithToolsResult.SingleToolCall("call_0", "list_tasks", Map.of("userId", userId))));
+    }
+
+    /**
      * Parse the Responses API output array for a function_call item.
      * Output items look like: { "type": "function_call", "name": "create_task", "arguments": "{...}" }
+     * @deprecated Prefer {@link #chatWithTools(Long, List)} for the multi-turn loop.
      */
+    @Deprecated
     @SuppressWarnings("unchecked")
     private static ToolCallResponse parseFunctionCallFromOutput(Map<String, Object> response) {
         Object output = response.get("output");

@@ -3,47 +3,38 @@ package com.assistant.core.service;
 import com.assistant.core.dto.whatsapp.WhatsAppWebhookMessage;
 import com.assistant.core.dto.whatsapp.WhatsAppWebhookPayload;
 import com.assistant.core.model.User;
-import com.assistant.core.mcp.LLMService;
-import com.assistant.core.mcp.ToolCallResponse;
-import com.assistant.core.mcp.ToolRouter;
 import com.assistant.core.repository.UserRepository;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Optional;
 
 /**
- * Handles WhatsApp webhook POST: map phone to user, call LLM, route tool, format response text.
+ * Handles WhatsApp webhook POST: map phone to user, delegate to conversation loop, return response text.
  * No outbound WhatsApp API call—only formulates the response message.
  */
 @Service
 public class WhatsAppWebhookService {
 
     private static final Logger log = LoggerFactory.getLogger(WhatsAppWebhookService.class);
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private static final String COMPACT_COMMAND = "/compact";
 
     private final UserRepository userRepository;
-    private final LLMService llmService;
-    private final ToolRouter toolRouter;
     private final ChatMemoryService chatMemoryService;
+    private final ConversationOrchestratorService conversationOrchestrator;
 
-    public WhatsAppWebhookService(UserRepository userRepository, LLMService llmService,
-                                  ToolRouter toolRouter, ChatMemoryService chatMemoryService) {
+    public WhatsAppWebhookService(UserRepository userRepository,
+                                  ChatMemoryService chatMemoryService,
+                                  ConversationOrchestratorService conversationOrchestrator) {
         this.userRepository = userRepository;
-        this.llmService = llmService;
-        this.toolRouter = toolRouter;
         this.chatMemoryService = chatMemoryService;
+        this.conversationOrchestrator = conversationOrchestrator;
     }
 
     /**
-     * Validates payload, extracts phone and message, maps to user, runs LLM + tool, returns response text.
+     * Validates payload, extracts phone and message, maps to user, runs conversation loop, returns response text.
      * Never throws for user-facing issues — always returns a reply string so the bridge can send it back.
      */
     public String processIncomingMessage(WhatsAppWebhookPayload payload) {
@@ -77,19 +68,9 @@ public class WhatsAppWebhookService {
         }
 
         try {
-            chatMemoryService.saveUserMessage(userId, messageText);
-            String history = chatMemoryService.getConversationHistory(userId);
-
-            ToolCallResponse toolCall = llmService.requestToolCall(userId, messageText, history);
-            log.info("Webhook tool call: userId={}, tool={}", userId, toolCall.tool());
-            Map<String, Object> toolResult = toolRouter.invoke(toolCall.tool(), ensureUserId(toolCall.parameters(), userId));
-
-            String naturalResponse = llmService.generateNaturalResponse(
-                    userId, messageText, toolCall.tool(), toolResult, history);
-            log.info("Webhook natural response generated for userId={}", userId);
-
-            chatMemoryService.saveAssistantMessage(userId, naturalResponse);
-            return naturalResponse;
+            String reply = conversationOrchestrator.processMessage(userId, messageText);
+            log.info("Webhook reply generated for userId={}", userId);
+            return reply;
         } catch (Exception e) {
             log.error("Error processing message for userId={}: {}", userId, e.getMessage(), e);
             return "Sorry, something went wrong while processing your request. Please try again later.";
@@ -152,54 +133,5 @@ public class WhatsAppWebhookService {
         }
 
         return Optional.empty();
-    }
-
-    private Map<String, Object> ensureUserId(Map<String, Object> parameters, Long userId) {
-        Map<String, Object> params = new LinkedHashMap<>(parameters != null ? parameters : Map.of());
-        params.put("userId", userId);
-        return params;
-    }
-
-    private String formatResponseMessage(String toolName, Map<String, Object> toolResult) {
-        try {
-            StringBuilder sb = new StringBuilder();
-            sb.append("Tool: ").append(toolName).append("\n");
-            if (toolResult.containsKey("tasks")) {
-                @SuppressWarnings("unchecked")
-                var tasks = (java.util.List<Map<String, Object>>) toolResult.get("tasks");
-                sb.append("Pending tasks: ").append(toolResult.get("count")).append("\n");
-                if (tasks != null && !tasks.isEmpty()) {
-                    for (int i = 0; i < tasks.size(); i++) {
-                        Map<String, Object> t = tasks.get(i);
-                        sb.append(i + 1).append(". ").append(t.get("title"));
-                        if (t.get("dueTime") != null) sb.append(" (due: ").append(t.get("dueTime")).append(")");
-                        sb.append("\n");
-                    }
-                }
-            } else if (toolResult.containsKey("people")) {
-                @SuppressWarnings("unchecked")
-                var people = (java.util.List<Map<String, Object>>) toolResult.get("people");
-                sb.append("Contacts: ").append(toolResult.get("count")).append("\n");
-                if (people != null && !people.isEmpty()) {
-                    for (int i = 0; i < people.size(); i++) {
-                        Map<String, Object> p = people.get(i);
-                        sb.append(i + 1).append(". ").append(p.get("name"));
-                        if (p.get("notes") != null && !p.get("notes").toString().isBlank())
-                            sb.append(" - ").append(p.get("notes"));
-                        sb.append("\n");
-                    }
-                }
-            } else if (toolResult.containsKey("id")) {
-                sb.append("Done. ");
-                if (toolResult.get("title") != null) sb.append("Task: ").append(toolResult.get("title"));
-                else if (toolResult.get("name") != null) sb.append("Added: ").append(toolResult.get("name"));
-                sb.append("\n");
-            } else {
-                sb.append(OBJECT_MAPPER.writeValueAsString(toolResult));
-            }
-            return sb.toString().trim();
-        } catch (JsonProcessingException e) {
-            return "Action completed. " + toolResult;
-        }
     }
 }
