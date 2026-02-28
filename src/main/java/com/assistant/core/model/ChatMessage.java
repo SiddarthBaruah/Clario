@@ -33,8 +33,11 @@ public class ChatMessage {
     @Column(name = "visibility", length = 20)
     private String visibility;
 
-    @Column(name = "created_at")
+    @Column(name = "created_at", insertable = false, updatable = false)
     private Instant createdAt;
+
+    @Column(name = "modified_at", insertable = false, updatable = false)
+    private Instant modifiedAt;
 
     public ChatMessage() {
     }
@@ -60,4 +63,6 @@ public class ChatMessage {
     public void setVisibility(String visibility) { this.visibility = visibility; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+    public Instant getModifiedAt() { return modifiedAt; }
+    public void setModifiedAt(Instant modifiedAt) { this.modifiedAt = modifiedAt; }
 }

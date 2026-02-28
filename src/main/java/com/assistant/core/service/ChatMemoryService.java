@@ -92,7 +92,7 @@ public class ChatMemoryService {
 
     /**
      * Returns full conversation history as a list of message maps in API shape (role, content, optional tool_calls / tool_call_id)
-     * for use by the conversation loop (LLM context). Order: oldest first.
+     * for use by the conversation loop (LLM context). Order: oldest first (API expects chronological order).
      */
     public List<Map<String, Object>> getConversationHistoryForContext(Long userId, int limit) {
         List<ChatMessage> rows = chatMessageRepository.findRecentByUserId(userId, limit);
@@ -115,6 +115,8 @@ public class ChatMemoryService {
                 default -> out.add(Map.of("role", "assistant", "content", content));
             }
         }
+        // Repository returns newest first (ORDER BY createdAt DESC); reverse so oldest first for the API.
+        java.util.Collections.reverse(out);
         return out;
     }
 

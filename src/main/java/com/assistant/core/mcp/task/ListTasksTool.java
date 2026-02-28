@@ -30,7 +30,7 @@ public class ListTasksTool implements Tool {
     @Override
     public String description() {
         return "Use when the user asks to see their tasks, to-dos, list, what they need to do, what's pending, or what they have scheduled (e.g. 'what are my tasks?', 'show my to-do list', 'what do I have due?'). "
-                + "Returns active tasks (pending and in progress). Parameters: userId (required).";
+                + "Returns the user's active tasks (pending and in progress). You must use this result to answer in natural language and must not call list_tasks again in the same turn unless the user explicitly asks to refresh or list again. Parameters: userId (required).";
     }
 
     @Override

@@ -26,6 +26,12 @@ public class ReminderLog {
     @Column(name = "status", nullable = false, length = 50)
     private String status;
 
+    @Column(name = "created_at", insertable = false, updatable = false)
+    private Instant createdAt;
+
+    @Column(name = "modified_at", insertable = false, updatable = false)
+    private Instant modifiedAt;
+
     public ReminderLog() {}
 
     public ReminderLog(Long id, Long taskId, Instant sentAt, String status) {
@@ -43,4 +49,8 @@ public class ReminderLog {
     public void setSentAt(Instant sentAt) { this.sentAt = sentAt; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public Instant getCreatedAt() { return createdAt; }
+    public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+    public Instant getModifiedAt() { return modifiedAt; }
+    public void setModifiedAt(Instant modifiedAt) { this.modifiedAt = modifiedAt; }
 }

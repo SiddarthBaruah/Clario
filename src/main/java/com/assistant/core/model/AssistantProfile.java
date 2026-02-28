@@ -26,8 +26,11 @@ public class AssistantProfile {
     @Column(name = "personality_prompt", columnDefinition = "TEXT")
     private String personalityPrompt;
 
-    @Column(name = "created_at")
+    @Column(name = "created_at", insertable = false, updatable = false)
     private Instant createdAt;
+
+    @Column(name = "modified_at", insertable = false, updatable = false)
+    private Instant modifiedAt;
 
     public AssistantProfile() {
     }
@@ -50,4 +53,6 @@ public class AssistantProfile {
     public void setPersonalityPrompt(String personalityPrompt) { this.personalityPrompt = personalityPrompt; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+    public Instant getModifiedAt() { return modifiedAt; }
+    public void setModifiedAt(Instant modifiedAt) { this.modifiedAt = modifiedAt; }
 }

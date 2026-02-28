@@ -39,8 +39,11 @@ public class User {
     @Column(name = "password_hash", nullable = false)
     private String passwordHash;
 
-    @Column(name = "created_at")
+    @Column(name = "created_at", insertable = false, updatable = false)
     private Instant createdAt;
+
+    @Column(name = "modified_at", insertable = false, updatable = false)
+    private Instant modifiedAt;
 
     @Transient
     private List<String> roles = Collections.emptyList();
@@ -83,6 +86,8 @@ public class User {
     public void setPasswordHash(String passwordHash) { this.passwordHash = passwordHash; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+    public Instant getModifiedAt() { return modifiedAt; }
+    public void setModifiedAt(Instant modifiedAt) { this.modifiedAt = modifiedAt; }
     public List<String> getRoles() { return roles; }
     public void setRoles(List<String> roles) { this.roles = roles != null ? roles : Collections.emptyList(); }
 }

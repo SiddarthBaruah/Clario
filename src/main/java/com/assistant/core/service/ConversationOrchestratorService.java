@@ -47,6 +47,7 @@ public class ConversationOrchestratorService {
      */
     public String processMessage(Long userId, String userMessage) {
         chatMemoryService.saveUserMessage(userId, userMessage);
+        // History is oldest-first (API expects chronological order for correct turn-taking).
         List<Map<String, Object>> messages = new ArrayList<>(chatMemoryService.getConversationHistoryForContext(userId, HISTORY_LIMIT));
 
         int iteration = 0;

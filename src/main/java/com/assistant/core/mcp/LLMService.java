@@ -30,6 +30,9 @@ public class LLMService {
     private static final Logger log = LoggerFactory.getLogger(LLMService.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
+    /** Returned when the LLM is unavailable or response cannot be parsed, so the loop exits with a message instead of re-calling tools. */
+    private static final String UNAVAILABLE_MESSAGE = "Sorry, I had trouble processing that. Please try again.";
+
     private final RestClient restClient;
     private final AssistantProfileService assistantProfileService;
     private final ToolRouter toolRouter;
@@ -122,25 +125,28 @@ public class LLMService {
      */
     public ChatWithToolsResult chatWithTools(Long userId, List<Map<String, Object>> messages) {
         if (this.baseUrl.isBlank()) {
-            log.debug("LLM base URL not configured; returning placeholder tool call");
-            return new ChatWithToolsResult.ToolCalls(List.of(
-                    new ChatWithToolsResult.SingleToolCall("call_0", "list_tasks", Map.of("userId", userId))));
+            log.warn("LLM base URL not configured; returning user-facing message so loop exits. baseUrl is blank.");
+            return new ChatWithToolsResult.Content(UNAVAILABLE_MESSAGE);
         }
         String systemContext = getSystemContextForUser(userId);
         String currentTimeContext = "\n\n--- Current time (use this to resolve relative times like 'tomorrow at 3pm', 'next Friday', 'in 2 hours') ---\n"
                 + "Current date and time in ISO-8601 (UTC): " + Instant.now().atOffset(ZoneOffset.UTC)
                 + "\nAlways output dueTime and reminderTime as full ISO-8601 timestamps (e.g. 2025-02-24T15:00:00Z). Never use placeholders or incomplete values.";
         systemContext += currentTimeContext;
+        systemContext += "\n\nAfter receiving any tool result, respond to the user in natural language. Do not call the same tool again without a new explicit user request.";
 
         List<Map<String, Object>> input = buildInputForResponsesApi(messages);
         List<Map<String, Object>> tools = buildToolDefinitions();
+        // Require tool use when the user just sent a message (no tool results in this turn yet)
+        boolean lastMessageIsUser = lastInputItemIsUserMessage(input);
+        String toolChoice = lastMessageIsUser ? "required" : "auto";
         try {
             Map<String, Object> requestBody = new LinkedHashMap<>();
             requestBody.put("model", "gpt-5.1-codex-mini");
             requestBody.put("instructions", systemContext);
             requestBody.put("input", input);
             requestBody.put("tools", tools);
-            requestBody.put("tool_choice", "auto");
+            requestBody.put("tool_choice", toolChoice);
 
             String responseBody = restClient.post()
                     .uri("/v1/responses")
@@ -149,24 +155,39 @@ public class LLMService {
                     .body(String.class);
 
             if (responseBody == null || responseBody.isBlank()) {
-                return new ChatWithToolsResult.ToolCalls(List.of(
-                        new ChatWithToolsResult.SingleToolCall("call_0", "list_tasks", Map.of("userId", userId))));
+                log.warn("chatWithTools: empty API response body; returning user-facing message. responseBody is null or blank.");
+                return new ChatWithToolsResult.Content(UNAVAILABLE_MESSAGE);
             }
             Map<String, Object> top = parseJsonToMap(responseBody);
             if (top == null) {
-                return new ChatWithToolsResult.ToolCalls(List.of(
-                        new ChatWithToolsResult.SingleToolCall("call_0", "list_tasks", Map.of("userId", userId))));
+                log.warn("chatWithTools: API response is not valid JSON; returning user-facing message. Raw response (truncated): {}", truncate(responseBody, 500));
+                return new ChatWithToolsResult.Content(UNAVAILABLE_MESSAGE);
             }
-            return parseChatWithToolsOutput(top, userId);
+            return parseChatWithToolsOutput(top, userId, responseBody);
         } catch (Exception e) {
-            log.warn("chatWithTools failed, returning placeholder: {}", e.getMessage());
-            return new ChatWithToolsResult.ToolCalls(List.of(
-                    new ChatWithToolsResult.SingleToolCall("call_0", "list_tasks", Map.of("userId", userId))));
+            log.warn("chatWithTools failed; returning user-facing message. Error: {}", e.getMessage());
+            return new ChatWithToolsResult.Content(UNAVAILABLE_MESSAGE);
         }
     }
 
-    /** Build input array for /v1/responses from our message list (user/assistant/tool). */
-    @SuppressWarnings("unchecked")
+    private static boolean lastInputItemIsUserMessage(List<Map<String, Object>> input) {
+        if (input == null || input.isEmpty()) return false;
+        Object last = input.get(input.size() - 1);
+        if (!(last instanceof Map<?, ?> m)) return false;
+        return "user".equals(m.get("role"));
+    }
+
+    private static String truncate(String s, int maxLen) {
+        if (s == null) return "null";
+        return s.length() <= maxLen ? s : s.substring(0, maxLen) + "...";
+    }
+
+    /**
+     * Build input array for /v1/responses from our message list (user/assistant/tool).
+     * Responses API expects: user/assistant messages with role+content; assistant tool turns as
+     * input items type "function_call" (call_id, name, arguments); tool results as
+     * type "function_call_output" (call_id, output). API expects oldest-first order.
+     */
     private List<Map<String, Object>> buildInputForResponsesApi(List<Map<String, Object>> messages) {
         List<Map<String, Object>> input = new ArrayList<>();
         for (Map<String, Object> m : messages) {
@@ -178,13 +199,33 @@ public class LLMService {
             } else if ("assistant".equals(role)) {
                 Object toolCalls = m.get("tool_calls");
                 if (toolCalls instanceof List<?> list && !list.isEmpty()) {
-                    input.add(new LinkedHashMap<>(Map.of("role", "assistant", "content", contentStr, "tool_calls", toolCalls)));
+                    for (Object tc : list) {
+                        if (!(tc instanceof Map<?, ?> tcm)) continue;
+                        String callId = tcm.get("id") != null ? tcm.get("id").toString() : null;
+                        Object fn = tcm.get("function");
+                        String name = null;
+                        String argumentsStr = "{}";
+                        if (fn instanceof Map<?, ?> fnMap) {
+                            name = fnMap.get("name") != null ? fnMap.get("name").toString() : null;
+                            Object args = fnMap.get("arguments");
+                            if (args != null) {
+                                try {
+                                argumentsStr = args instanceof String ? (String) args : OBJECT_MAPPER.writeValueAsString(args);
+                            } catch (Exception e) {
+                                argumentsStr = "{}";
+                            }
+                            }
+                        }
+                        if (callId != null && name != null) {
+                            input.add(Map.of("type", "function_call", "call_id", callId, "name", name, "arguments", argumentsStr));
+                        }
+                    }
                 } else {
                     input.add(Map.of("role", "assistant", "content", contentStr));
                 }
             } else if ("tool".equals(role) || "function".equals(role)) {
                 String toolCallId = m.get("tool_call_id") != null ? m.get("tool_call_id").toString() : m.get("name") != null ? m.get("name").toString() : "call";
-                input.add(Map.of("role", "function", "name", toolCallId, "content", contentStr));
+                input.add(Map.of("type", "function_call_output", "call_id", toolCallId, "output", contentStr));
             }
             // skip system or unknown
         }
@@ -192,11 +233,11 @@ public class LLMService {
     }
 
     @SuppressWarnings("unchecked")
-    private ChatWithToolsResult parseChatWithToolsOutput(Map<String, Object> response, Long userId) {
+    private ChatWithToolsResult parseChatWithToolsOutput(Map<String, Object> response, Long userId, String rawResponseBody) {
         Object output = response.get("output");
         if (!(output instanceof List<?> outputList) || outputList.isEmpty()) {
-            return new ChatWithToolsResult.ToolCalls(List.of(
-                    new ChatWithToolsResult.SingleToolCall("call_0", "list_tasks", Map.of("userId", userId))));
+            log.warn("parseChatWithToolsOutput: response.output missing, not a list, or empty. Raw output (truncated): {}", truncate(rawResponseBody, 500));
+            return new ChatWithToolsResult.Content(UNAVAILABLE_MESSAGE);
         }
         List<ChatWithToolsResult.SingleToolCall> toolCalls = new ArrayList<>();
         String textContent = null;
@@ -217,13 +258,18 @@ public class LLMService {
                             if (parsed != null) params = parsed;
                         }
                     }
-                    String id = entry.get("id") != null ? entry.get("id").toString() : ("call_" + callIndex++);
+                    String id = entry.get("call_id") != null ? entry.get("call_id").toString() : entry.get("id") != null ? entry.get("id").toString() : ("call_" + callIndex++);
                     toolCalls.add(new ChatWithToolsResult.SingleToolCall(id, name, params));
                 }
             } else if ("message".equals(type)) {
                 Object content = entry.get("content");
                 if (content != null && !content.toString().isBlank()) {
-                    textContent = content.toString().strip();
+                    textContent = extractTextFromMessageContent(content);
+                }
+            } else if ("output_text".equals(type)) {
+                Object text = entry.get("text");
+                if (text != null && !text.toString().isBlank()) {
+                    textContent = text.toString().strip();
                 }
             }
         }
@@ -233,8 +279,26 @@ public class LLMService {
         if (textContent != null && !textContent.isBlank()) {
             return new ChatWithToolsResult.Content(textContent);
         }
-        return new ChatWithToolsResult.ToolCalls(List.of(
-                new ChatWithToolsResult.SingleToolCall("call_0", "list_tasks", Map.of("userId", userId))));
+        log.warn("parseChatWithToolsOutput: no recognized tool_calls or text in output; returning user-facing message. response.output: {}", output);
+        return new ChatWithToolsResult.Content(UNAVAILABLE_MESSAGE);
+    }
+
+    /** Extract plain text from message content (may be string or array of content parts, e.g. output_text). */
+    private static String extractTextFromMessageContent(Object content) {
+        if (content == null) return null;
+        if (content instanceof String s) return s.isBlank() ? null : s.strip();
+        if (content instanceof List<?> list) {
+            StringBuilder sb = new StringBuilder();
+            for (Object part : list) {
+                if (part instanceof Map<?, ?> m) {
+                    Object text = m.get("text");
+                    if (text != null && !text.toString().isBlank()) sb.append(text.toString().strip()).append(" ");
+                }
+            }
+            String t = sb.toString().strip();
+            return t.isEmpty() ? null : t;
+        }
+        return content.toString().strip();
     }
 
     /**
@@ -367,7 +431,9 @@ public class LLMService {
         Object first = list.get(0);
         if (!(first instanceof Map)) return null;
         Object msg = ((Map<?, ?>) first).get("message");
-        return msg instanceof Map ? (Map<String, Object>) msg : null;
+        @SuppressWarnings("unchecked")
+        Map<String, Object> messageMap = msg instanceof Map ? (Map<String, Object>) msg : null;
+        return messageMap;
     }
 
     /**

@@ -38,8 +38,11 @@ public class Task {
     @Column(name = "is_deleted", nullable = false)
     private boolean deleted = false;
 
-    @Column(name = "created_at")
+    @Column(name = "created_at", insertable = false, updatable = false)
     private Instant createdAt;
+
+    @Column(name = "modified_at", insertable = false, updatable = false)
+    private Instant modifiedAt;
 
     public Task() {
     }
@@ -74,4 +77,6 @@ public class Task {
     public void setDeleted(boolean deleted) { this.deleted = deleted; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+    public Instant getModifiedAt() { return modifiedAt; }
+    public void setModifiedAt(Instant modifiedAt) { this.modifiedAt = modifiedAt; }
 }
