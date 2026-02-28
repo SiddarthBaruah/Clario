@@ -8,6 +8,7 @@ import com.assistant.core.repository.TaskRepository;
 import com.assistant.core.util.InputSanitizer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -50,8 +51,7 @@ public class TaskService {
     }
 
     public PageResponseDTO<TaskResponseDTO> listPendingTasks(Long userId, int page, int size) {
-        int offset = page * size;
-        List<Task> tasks = taskRepository.findByUserIdAndStatus(userId, STATUS_PENDING, size, offset);
+        List<Task> tasks = taskRepository.findByUserIdAndStatus(userId, STATUS_PENDING, PageRequest.of(page, size));
         long total = taskRepository.countByUserIdAndStatus(userId, STATUS_PENDING);
         List<TaskResponseDTO> content = tasks.stream().map(this::toResponseDTO).collect(Collectors.toList());
         return new PageResponseDTO<>(content, total, page, size);

@@ -68,7 +68,7 @@ public class ReminderScheduler {
             reminderLog.setTaskId(task.getId());
             reminderLog.setSentAt(now);
             reminderLog.setStatus("SENT");
-            reminderLogRepository.insert(reminderLog);
+            reminderLogRepository.save(reminderLog);
             log.info("Reminder sent for task id={}, title='{}'", task.getId(), task.getTitle());
         }
     }

@@ -9,6 +9,7 @@ import com.assistant.core.repository.PeopleRepository;
 import com.assistant.core.util.InputSanitizer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -66,8 +67,7 @@ public class PeopleService {
     }
 
     public PageResponseDTO<PersonResponseDTO> listPeople(Long userId, int page, int size) {
-        int offset = page * size;
-        List<People> list = peopleRepository.findByUserId(userId, size, offset);
+        List<People> list = peopleRepository.findByUserId(userId, PageRequest.of(page, size));
         long total = peopleRepository.countByUserId(userId);
         List<PersonResponseDTO> content = list.stream().map(this::toResponseDTO).collect(Collectors.toList());
         return new PageResponseDTO<>(content, total, page, size);

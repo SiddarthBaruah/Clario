@@ -1,12 +1,29 @@
 package com.assistant.core.model;
 
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+
 import java.time.Instant;
 
+@Entity
+@Table(name = "reminder_log")
 public class ReminderLog {
 
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Column(name = "task_id", nullable = false)
     private Long taskId;
+
+    @Column(name = "sent_at", nullable = false)
     private Instant sentAt;
+
+    @Column(name = "status", nullable = false, length = 50)
     private String status;
 
     public ReminderLog() {}

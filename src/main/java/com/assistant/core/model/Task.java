@@ -1,16 +1,41 @@
 package com.assistant.core.model;
 
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+
 import java.time.Instant;
 
+@Entity
+@Table(name = "tasks")
 public class Task {
 
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Column(name = "user_id", nullable = false)
     private Long userId;
+
+    @Column(name = "title", nullable = false, length = 500)
     private String title;
+
+    @Column(name = "description", columnDefinition = "TEXT")
     private String description;
+
+    @Column(name = "due_time")
     private Instant dueTime;
+
+    @Column(name = "reminder_time")
     private Instant reminderTime;
+
+    @Column(name = "status", nullable = false, length = 20)
     private String status; // PENDING, DONE
+
+    @Column(name = "created_at")
     private Instant createdAt;
 
     public Task() {

@@ -1,14 +1,35 @@
 package com.assistant.core.model;
 
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+
 import java.time.Instant;
 
+@Entity
+@Table(name = "people")
 public class People {
 
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Column(name = "user_id", nullable = false)
     private Long userId;
+
+    @Column(name = "name", nullable = false)
     private String name;
+
+    @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
-    private String importantDates; // JSON text
+
+    @Column(name = "important_dates", columnDefinition = "json")
+    private String importantDates;
+
+    @Column(name = "created_at")
     private Instant createdAt;
 
     public People() {
