@@ -1,7 +1,8 @@
-package com.assistant.core.mcp;
+package com.assistant.core.mcp.person;
 
 import com.assistant.core.dto.AddPersonRequestDTO;
 import com.assistant.core.dto.PersonResponseDTO;
+import com.assistant.core.mcp.Tool;
 import com.assistant.core.service.PeopleService;
 import org.springframework.stereotype.Component;
 

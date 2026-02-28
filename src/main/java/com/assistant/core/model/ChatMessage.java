@@ -1,18 +1,39 @@
 package com.assistant.core.model;
 
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+
 import java.time.Instant;
 
+@Entity
+@Table(name = "chat_messages")
 public class ChatMessage {
 
     /** Visibility: INTERNAL (AI-only, tool calls/results) or USER_FACING (shown in chat UI). */
     public static final String VISIBILITY_INTERNAL = "INTERNAL";
     public static final String VISIBILITY_USER_FACING = "USER_FACING";
 
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Column(name = "user_id", nullable = false)
     private Long userId;
+
+    @Column(name = "role", nullable = false, length = 20)
     private String role;   // USER, ASSISTANT, SYSTEM, TOOL
+
+    @Column(name = "content", nullable = false, columnDefinition = "TEXT")
     private String content;
+
+    @Column(name = "visibility", length = 20)
     private String visibility;
+
+    @Column(name = "created_at")
     private Instant createdAt;
 
     public ChatMessage() {

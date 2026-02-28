@@ -10,7 +10,9 @@ import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -18,6 +20,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.Map;
 
 @RestController
 @RequestMapping("/tasks")
@@ -65,6 +69,29 @@ public class TaskController {
         Long userId = resolveUserId(authentication);
         TaskResponseDTO task = taskService.markDone(userId, id);
         return ResponseEntity.ok(ApiResponse.ok(task));
+    }
+
+    @PatchMapping("/{id}/status")
+    public ResponseEntity<ApiResponse<TaskResponseDTO>> updateTaskStatus(
+            Authentication authentication,
+            @PathVariable Long id,
+            @RequestBody Map<String, String> body) {
+        Long userId = resolveUserId(authentication);
+        String status = body != null ? body.get("status") : null;
+        if (status == null || status.isBlank()) {
+            return ResponseEntity.badRequest().build();
+        }
+        TaskResponseDTO task = taskService.updateStatus(userId, id, status.trim().toUpperCase());
+        return ResponseEntity.ok(ApiResponse.ok(task));
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<ApiResponse<Void>> deleteTask(
+            Authentication authentication,
+            @PathVariable Long id) {
+        Long userId = resolveUserId(authentication);
+        taskService.delete(userId, id);
+        return ResponseEntity.ok(ApiResponse.ok(null));
     }
 
     private Long resolveUserId(Authentication authentication) {

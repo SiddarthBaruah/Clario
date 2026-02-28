@@ -20,7 +20,8 @@ public class ToolRouter {
 
     /** Allowed tool names; only these can be invoked from LLM output. */
     private static final Set<String> ALLOWED_TOOLS = Set.of(
-            "create_task", "list_tasks", "add_person", "retrieve_people"
+            "create_task", "list_tasks", "find_tasks", "update_task_status", "delete_task", "resolve_and_act_on_task",
+            "add_person", "retrieve_people"
     );
 
     private final List<Tool> tools;

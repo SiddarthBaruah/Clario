@@ -1,13 +1,32 @@
 package com.assistant.core.model;
 
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+
 import java.time.Instant;
 
+@Entity
+@Table(name = "assistant_profile")
 public class AssistantProfile {
 
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Column(name = "user_id", nullable = false)
     private Long userId;
+
+    @Column(name = "assistant_name", nullable = false)
     private String assistantName;
+
+    @Column(name = "personality_prompt", columnDefinition = "TEXT")
     private String personalityPrompt;
+
+    @Column(name = "created_at")
     private Instant createdAt;
 
     public AssistantProfile() {

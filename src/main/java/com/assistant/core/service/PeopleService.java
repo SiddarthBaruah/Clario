@@ -9,6 +9,7 @@ import com.assistant.core.repository.PeopleRepository;
 import com.assistant.core.util.InputSanitizer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -49,7 +50,7 @@ public class PeopleService {
     public PersonResponseDTO updatePersonNotes(Long userId, Long personId, UpdatePersonNotesRequestDTO request) {
         People people = peopleRepository.findById(personId)
                 .orElseThrow(() -> new IllegalArgumentException("Person not found"));
-        if (!people.getUserId().equals(userId)) {
+        if (!people.getUserId().equals(userId) || people.isDeleted()) {
             throw new IllegalArgumentException("Person not found");
         }
         String notes = InputSanitizer.sanitizeLongText(request.getNotes());
@@ -59,16 +60,27 @@ public class PeopleService {
         return toResponseDTO(people);
     }
 
+    @Transactional
+    public void delete(Long userId, Long personId) {
+        People people = peopleRepository.findById(personId)
+                .orElseThrow(() -> new IllegalArgumentException("Person not found"));
+        if (!people.getUserId().equals(userId) || people.isDeleted()) {
+            throw new IllegalArgumentException("Person not found");
+        }
+        people.setDeleted(true);
+        peopleRepository.save(people);
+        log.info("Person soft-deleted: id={}, userId={}", personId, userId);
+    }
+
     public List<PersonResponseDTO> listPeople(Long userId) {
-        return peopleRepository.findByUserId(userId).stream()
+        return peopleRepository.findByUserIdAndDeletedFalse(userId).stream()
                 .map(this::toResponseDTO)
                 .collect(Collectors.toList());
     }
 
     public PageResponseDTO<PersonResponseDTO> listPeople(Long userId, int page, int size) {
-        int offset = page * size;
-        List<People> list = peopleRepository.findByUserId(userId, size, offset);
-        long total = peopleRepository.countByUserId(userId);
+        List<People> list = peopleRepository.findByUserIdAndDeletedFalse(userId, PageRequest.of(page, size));
+        long total = peopleRepository.countByUserIdAndDeletedFalse(userId);
         List<PersonResponseDTO> content = list.stream().map(this::toResponseDTO).collect(Collectors.toList());
         return new PageResponseDTO<>(content, total, page, size);
     }

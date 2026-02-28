@@ -305,6 +305,41 @@ public class LLMService {
                     "properties", Map.of("userId", Map.of("type", "number", "description", "User ID")),
                     "required", List.of("userId")
             );
+            case "find_tasks" -> Map.of(
+                    "type", "object",
+                    "properties", Map.of(
+                            "userId", Map.of("type", "number", "description", "User ID"),
+                            "query", Map.of("type", "string", "description", "Normalized task reference (e.g. 'milk', 'call John')"),
+                            "maxResults", Map.of("type", "number", "description", "Max tasks to return (optional, default 10)")
+                    ),
+                    "required", List.of("userId", "query")
+            );
+            case "update_task_status" -> Map.of(
+                    "type", "object",
+                    "properties", Map.of(
+                            "userId", Map.of("type", "number", "description", "User ID"),
+                            "taskId", Map.of("type", "number", "description", "Task ID from find_tasks or disambiguation"),
+                            "status", Map.of("type", "string", "description", "PENDING, IN_PROGRESS, or DONE")
+                    ),
+                    "required", List.of("userId", "taskId", "status")
+            );
+            case "delete_task" -> Map.of(
+                    "type", "object",
+                    "properties", Map.of(
+                            "userId", Map.of("type", "number", "description", "User ID"),
+                            "taskId", Map.of("type", "number", "description", "Task ID from find_tasks or disambiguation")
+                    ),
+                    "required", List.of("userId", "taskId")
+            );
+            case "resolve_and_act_on_task" -> Map.of(
+                    "type", "object",
+                    "properties", Map.of(
+                            "userId", Map.of("type", "number", "description", "User ID"),
+                            "userDescription", Map.of("type", "string", "description", "Normalized task reference (e.g. 'milk', 'call John')"),
+                            "action", Map.of("type", "string", "description", "delete, mark_done, mark_pending, or mark_in_progress")
+                    ),
+                    "required", List.of("userId", "userDescription", "action")
+            );
             case "add_person" -> Map.of(
                     "type", "object",
                     "properties", Map.of(

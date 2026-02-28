@@ -1,7 +1,8 @@
-package com.assistant.core.mcp;
+package com.assistant.core.mcp.task;
 
 import com.assistant.core.dto.TaskRequestDTO;
 import com.assistant.core.dto.TaskResponseDTO;
+import com.assistant.core.mcp.Tool;
 import com.assistant.core.service.TaskService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

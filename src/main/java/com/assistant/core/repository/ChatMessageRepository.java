@@ -1,116 +1,43 @@
 package com.assistant.core.repository;
 
 import com.assistant.core.model.ChatMessage;
-import org.springframework.jdbc.core.RowMapper;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.jdbc.support.GeneratedKeyHolder;
-import org.springframework.jdbc.support.KeyHolder;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
-import java.sql.Timestamp;
-import java.time.Instant;
 import java.util.List;
-import java.util.Objects;
 
 @Repository
-public class ChatMessageRepository {
+public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long>, JpaSpecificationExecutor<ChatMessage> {
 
-    private final NamedParameterJdbcTemplate jdbcTemplate;
+    @Query("SELECT m FROM ChatMessage m WHERE m.userId = :userId ORDER BY m.createdAt DESC")
+    List<ChatMessage> findRecentByUserId(@Param("userId") Long userId, Pageable pageable);
 
-    private static final RowMapper<ChatMessage> ROW_MAPPER = new ChatMessageRowMapper();
-
-    public ChatMessageRepository(NamedParameterJdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = jdbcTemplate;
+    default List<ChatMessage> findRecentByUserId(Long userId, int limit) {
+        return findRecentByUserId(userId, Pageable.ofSize(limit).first());
     }
 
-    public ChatMessage save(ChatMessage message) {
-        String visibility = message.getVisibility() != null && !message.getVisibility().isBlank()
-                ? message.getVisibility() : ChatMessage.VISIBILITY_USER_FACING;
-        String sql = "INSERT INTO chat_messages (user_id, role, content, visibility) VALUES (?, ?, ?, ?)";
-        KeyHolder keyHolder = new GeneratedKeyHolder();
-        jdbcTemplate.getJdbcTemplate().update(connection -> {
-            PreparedStatement ps = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS);
-            ps.setLong(1, message.getUserId());
-            ps.setString(2, message.getRole());
-            ps.setString(3, message.getContent());
-            ps.setString(4, visibility);
-            return ps;
-        }, keyHolder);
-        Long id = Objects.requireNonNull(keyHolder.getKey()).longValue();
-        message.setId(id);
-        return message;
+    @Query("SELECT m FROM ChatMessage m WHERE m.userId = :userId AND m.visibility = :visibility ORDER BY m.createdAt DESC")
+    List<ChatMessage> findUserFacingByUserId(@Param("userId") Long userId, @Param("visibility") String visibility, Pageable pageable);
+
+    default List<ChatMessage> findUserFacingByUserId(Long userId, int limit) {
+        return findUserFacingByUserId(userId, ChatMessage.VISIBILITY_USER_FACING, Pageable.ofSize(limit).first());
     }
 
-    /**
-     * Returns the last {@code limit} messages for a user (all visibilities), ordered oldest-first
-     * for use as full LLM conversation context.
-     */
-    public List<ChatMessage> findRecentByUserId(Long userId, int limit) {
-        String sql = """
-                SELECT id, user_id, role, content, visibility, created_at
-                FROM chat_messages
-                WHERE user_id = :user_id
-                ORDER BY created_at DESC
-                LIMIT :limit
-                """;
-        MapSqlParameterSource params = new MapSqlParameterSource()
-                .addValue("user_id", userId)
-                .addValue("limit", limit);
-        List<ChatMessage> messages = jdbcTemplate.query(sql, params, ROW_MAPPER);
-        return messages.reversed();
-    }
+    @Modifying
+    @Query("DELETE FROM ChatMessage m WHERE m.userId = :userId")
+    void deleteAllByUserId(@Param("userId") Long userId);
 
-    /**
-     * Returns the last {@code limit} user-facing messages only (for chat UI / display).
-     */
-    public List<ChatMessage> findUserFacingByUserId(Long userId, int limit) {
-        String sql = """
-                SELECT id, user_id, role, content, visibility, created_at
-                FROM chat_messages
-                WHERE user_id = :user_id AND visibility = :visibility
-                ORDER BY created_at DESC
-                LIMIT :limit
-                """;
-        MapSqlParameterSource params = new MapSqlParameterSource()
-                .addValue("user_id", userId)
-                .addValue("visibility", ChatMessage.VISIBILITY_USER_FACING)
-                .addValue("limit", limit);
-        List<ChatMessage> messages = jdbcTemplate.query(sql, params, ROW_MAPPER);
-        return messages.reversed();
-    }
-
-    public int deleteAllByUserId(Long userId) {
-        String sql = "DELETE FROM chat_messages WHERE user_id = :user_id";
-        return jdbcTemplate.update(sql, new MapSqlParameterSource("user_id", userId));
-    }
-
-    public ChatMessage saveCompactedSummary(Long userId, String summary) {
+    default ChatMessage saveCompactedSummary(Long userId, String summary) {
         ChatMessage message = new ChatMessage();
         message.setUserId(userId);
         message.setRole("SYSTEM");
         message.setContent(summary);
         message.setVisibility(ChatMessage.VISIBILITY_USER_FACING);
         return save(message);
-    }
-
-    private static class ChatMessageRowMapper implements RowMapper<ChatMessage> {
-        @Override
-        public ChatMessage mapRow(ResultSet rs, int rowNum) throws SQLException {
-            ChatMessage msg = new ChatMessage();
-            msg.setId(rs.getLong("id"));
-            msg.setUserId(rs.getLong("user_id"));
-            msg.setRole(rs.getString("role"));
-            msg.setContent(rs.getString("content"));
-            String vis = rs.getString("visibility");
-            msg.setVisibility(vis != null && !vis.isBlank() ? vis : ChatMessage.VISIBILITY_USER_FACING);
-            Timestamp ts = rs.getTimestamp("created_at");
-            msg.setCreatedAt(ts != null ? ts.toInstant() : null);
-            return msg;
-        }
     }
 }
