@@ -11,9 +11,9 @@ import java.util.List;
 @Repository
 public interface PeopleRepository extends JpaRepository<People, Long>, JpaSpecificationExecutor<People> {
 
-    List<People> findByUserId(Long userId);
+    List<People> findByUserIdAndDeletedFalse(Long userId);
 
-    List<People> findByUserId(Long userId, Pageable pageable);
+    List<People> findByUserIdAndDeletedFalse(Long userId, Pageable pageable);
 
-    long countByUserId(Long userId);
+    long countByUserIdAndDeletedFalse(Long userId);
 }

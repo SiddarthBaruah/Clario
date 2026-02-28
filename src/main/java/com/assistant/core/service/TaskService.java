@@ -51,21 +51,21 @@ public class TaskService {
     }
 
     public List<TaskResponseDTO> listPendingTasks(Long userId) {
-        return taskRepository.findByUserIdAndStatus(userId, STATUS_PENDING).stream()
+        return taskRepository.findByUserIdAndStatusAndDeletedFalse(userId, STATUS_PENDING).stream()
                 .map(this::toResponseDTO)
                 .collect(Collectors.toList());
     }
 
     public PageResponseDTO<TaskResponseDTO> listPendingTasks(Long userId, int page, int size) {
-        List<Task> tasks = taskRepository.findByUserIdAndStatus(userId, STATUS_PENDING, PageRequest.of(page, size));
-        long total = taskRepository.countByUserIdAndStatus(userId, STATUS_PENDING);
+        List<Task> tasks = taskRepository.findByUserIdAndStatusAndDeletedFalse(userId, STATUS_PENDING, PageRequest.of(page, size));
+        long total = taskRepository.countByUserIdAndStatusAndDeletedFalse(userId, STATUS_PENDING);
         List<TaskResponseDTO> content = tasks.stream().map(this::toResponseDTO).collect(Collectors.toList());
         return new PageResponseDTO<>(content, total, page, size);
     }
 
     /** Returns active tasks (PENDING and IN_PROGRESS) for listing in assistant. */
     public List<TaskResponseDTO> listActiveTasks(Long userId) {
-        List<Task> tasks = taskRepository.findByUserIdAndStatusIn(
+        List<Task> tasks = taskRepository.findByUserIdAndStatusInAndDeletedFalse(
                 userId, List.of(STATUS_PENDING, STATUS_IN_PROGRESS), PageRequest.of(0, 500));
         return tasks.stream().map(this::toResponseDTO).collect(Collectors.toList());
     }
@@ -89,7 +89,7 @@ public class TaskService {
         }
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found"));
-        if (!task.getUserId().equals(userId)) {
+        if (!task.getUserId().equals(userId) || task.isDeleted()) {
             throw new IllegalArgumentException("Task not found");
         }
         task.setStatus(status);
@@ -107,11 +107,12 @@ public class TaskService {
     public void delete(Long userId, Long taskId) {
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found"));
-        if (!task.getUserId().equals(userId)) {
+        if (!task.getUserId().equals(userId) || task.isDeleted()) {
             throw new IllegalArgumentException("Task not found");
         }
-        taskRepository.delete(task);
-        log.info("Task deleted: id={}, userId={}", taskId, userId);
+        task.setDeleted(true);
+        taskRepository.save(task);
+        log.info("Task soft-deleted: id={}, userId={}", taskId, userId);
     }
 
     private TaskResponseDTO toResponseDTO(Task t) {

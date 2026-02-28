@@ -35,6 +35,9 @@ public class Task {
     @Column(name = "status", nullable = false, length = 20)
     private String status; // PENDING, IN_PROGRESS, DONE
 
+    @Column(name = "is_deleted", nullable = false)
+    private boolean deleted = false;
+
     @Column(name = "created_at")
     private Instant createdAt;
 
@@ -67,6 +70,8 @@ public class Task {
     public void setReminderTime(Instant reminderTime) { this.reminderTime = reminderTime; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public boolean isDeleted() { return deleted; }
+    public void setDeleted(boolean deleted) { this.deleted = deleted; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
 }
