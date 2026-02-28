@@ -30,13 +30,13 @@ public class ListTasksTool implements Tool {
     @Override
     public String description() {
         return "Use when the user asks to see their tasks, to-dos, list, what they need to do, what's pending, or what they have scheduled (e.g. 'what are my tasks?', 'show my to-do list', 'what do I have due?'). "
-                + "Returns only pending (incomplete) tasks. Parameters: userId (required).";
+                + "Returns active tasks (pending and in progress). Parameters: userId (required).";
     }
 
     @Override
     public Map<String, Object> execute(Map<String, Object> arguments) {
         Long userId = getUserId(arguments);
-        List<TaskResponseDTO> tasks = taskService.listPendingTasks(userId);
+        List<TaskResponseDTO> tasks = taskService.listActiveTasks(userId);
         List<Map<String, Object>> items = tasks.stream()
                 .map(ListTasksTool::toMap)
                 .collect(Collectors.toList());

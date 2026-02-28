@@ -33,7 +33,7 @@ public class Task {
     private Instant reminderTime;
 
     @Column(name = "status", nullable = false, length = 20)
-    private String status; // PENDING, DONE
+    private String status; // PENDING, IN_PROGRESS, DONE
 
     @Column(name = "created_at")
     private Instant createdAt;
